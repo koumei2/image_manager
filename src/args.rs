@@ -1,11 +1,11 @@
 use clap::{Parser, Subcommand};
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 pub struct Args {
     #[clap(subcommand)]
     pub command: Command,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand)]
 pub enum Command {
     #[clap(arg_required_else_help = true)]
     Info {

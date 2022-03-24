@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 
-pub fn info(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn info(args: Vec<String>) -> anyhow::Result<()> {
     let exifreader = Reader::new();
     for file_or_dir in args {
         let mut filelist = Vec::new();
@@ -35,7 +35,7 @@ pub fn info(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn exiflist(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn exiflist(args: Vec<String>) -> anyhow::Result<()> {
     let mut exiflist: BTreeMap<String, i32> = BTreeMap::new();
     let exifreader = Reader::new();
     for file_or_dir in args {
@@ -73,39 +73,39 @@ pub fn exiflist(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn regist(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn regist(args: Vec<String>) -> anyhow::Result<()> {
     let exifreader = Reader::new();
     for file_or_dir in args {
         let mut filelist = Vec::new();
         get_filelist(file_or_dir, &mut filelist);
         for f in filelist {
-            let mut image = super::Image::default();
-            let dandb = super::get_dirname_and_basename(&f);
-            image.file_path = dandb.0;
-            image.file_name = dandb.1;
+            let dandb = get_dirname_and_basename(&f);
+            let mut create_image = crate::image::RegistImage {
+                file_path: dandb.0,
+                file_name: dandb.1,
+                digitized_at: 0,
+                props: HashMap::new(),
+            };
+
             let file = std::fs::File::open(&f).expect(&format!("Cannot open file: {}", f));
             let mut bufreader = std::io::BufReader::new(&file);
             let exif = exifreader.read_from_container(&mut bufreader);
             if let Ok(e) = exif {
-                let mut props = HashMap::new();
+                insert_props_from_exif_field(&mut create_image.props, Tag::DateTimeOriginal, &e);
+                insert_props_from_exif_field(&mut create_image.props, Tag::DateTimeDigitized, &e);
+                insert_props_from_exif_field(&mut create_image.props, Tag::DateTime, &e);
 
-                insert_props_from_exif_field(&mut props, Tag::DateTimeOriginal, &e);
-                insert_props_from_exif_field(&mut props, Tag::DateTimeDigitized, &e);
-                insert_props_from_exif_field(&mut props, Tag::DateTime, &e);
-
-                if let Some(v) = props.get(&Tag::DateTimeOriginal.to_string()) {
-                    image.digitized_at = Local
+                if let Some(v) = create_image.props.get(&Tag::DateTimeOriginal.to_string()) {
+                    create_image.digitized_at = Local
                         .datetime_from_str(v, "%Y-%m-%d %H:%M:%S")
                         .unwrap()
                         .timestamp();
                 }
-
-                image.props = props;
             }
 
+            let image = create_image.db_regist_image().await?;
             println!("{:?}", image);
-            let image = super::db_regist_image(image);
-            println!("{:?}", image);
+            //println!("{}", image.props["DateTimeOriginal"]);
         }
     }
 
@@ -113,11 +113,14 @@ pub fn regist(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn get_filelist(file_or_dir: String, filelist: &mut Vec<String>) {
-    let ignore_list = [""];
-    //let ignore_list = [".DS_Store"];
+    let ignore_list = super::CONFIG
+        .get()
+        .unwrap()
+        .get_array("IGNORE_PATH")
+        .unwrap();
     let file_or_dir_basename = regex::Regex::new(r".*/").unwrap().replace(&file_or_dir, "");
     for i in ignore_list {
-        if file_or_dir_basename == i {
+        if file_or_dir_basename == i.to_string() {
             return;
         }
     }
@@ -140,4 +143,11 @@ fn insert_props_from_exif_field(
     if let Some(field) = exif.get_field(tag, In::PRIMARY) {
         props.insert(tag.to_string(), field.display_value().to_string());
     }
+}
+
+fn get_dirname_and_basename(path: &String) -> (String, String) {
+    let re = regex::Regex::new(r"(.*)/([^/]+)").unwrap();
+    let caps = re.captures(path).unwrap();
+    let r = (caps[1].to_string(), caps[2].to_string());
+    r
 }
