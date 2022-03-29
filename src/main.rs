@@ -20,11 +20,11 @@ async fn main() -> anyhow::Result<()> {
     let _ = CONFIG.set(config);
 
     match args.command {
-        args::Command::Info { path_list } => command::info(path_list)?,
-        args::Command::Exiflist { path_list } => command::exiflist(path_list)?,
-        args::Command::Regist { path_list } => {
+        args::Command::Info { target_path } => command::info(target_path)?,
+        args::Command::Exiflist { target_path } => command::exiflist(target_path)?,
+        args::Command::Regist { target_path } => {
             db::init().await?;
-            command::regist(path_list).await?;
+            command::regist(target_path).await?;
         }
     };
     Ok(())

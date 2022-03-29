@@ -1,4 +1,6 @@
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
 #[derive(Parser)]
 pub struct Args {
     #[clap(subcommand)]
@@ -10,14 +12,14 @@ pub enum Command {
     #[clap(arg_required_else_help = true)]
     Info {
         #[clap(required = true)]
-        path_list: Vec<String>,
+        target_path: PathBuf,
     },
     Exiflist {
         #[clap(required = true)]
-        path_list: Vec<String>,
+        target_path: PathBuf,
     },
     Regist {
         #[clap(required = true)]
-        path_list: Vec<String>,
+        target_path: PathBuf,
     },
 }
