@@ -8,9 +8,9 @@ use std::io::BufReader;
 use std::path::PathBuf;
 
 static MP4_CREATION_TIME_KEY: &str = "creation_time";
+static FILE_MTIME_KEY: &str = "file_mtime";
 
 pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
-    let exifreader = Reader::new();
     let mut filelist = Vec::new();
     get_filelist(target_path, &mut filelist);
     for f in filelist {
@@ -20,14 +20,17 @@ pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
             println!(
                 "--- movie filename: {},  creation time:  {}",
                 f.to_string_lossy().into_owned(),
-                get_mp4_creation_time(f, bufreader),
+                get_mp4_creation_time(&f, bufreader),
             );
         } else {
+            let exifreader = Reader::new();
             let exif = exifreader.read_from_container(&mut bufreader);
             match exif {
                 Err(err) => {
                     println!("filename: {}, err={}", f.to_string_lossy(), err);
-                    continue;
+                    /*let mtime: DateTime<Local> = f.metadata().unwrap().modified().unwrap().into();
+                    println!("--- {}", f.to_string_lossy());
+                    println!("file timestamp = {:?}", mtime);*/
                 }
                 Ok(e) => {
                     println!("--- {}", f.to_string_lossy());
@@ -48,10 +51,9 @@ pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
 
 pub fn exiflist(target_path: PathBuf) -> anyhow::Result<()> {
     let mut exiflist: BTreeMap<String, i32> = BTreeMap::new();
-    let exifreader = Reader::new();
     let mut filelist = Vec::new();
     get_filelist(target_path, &mut filelist);
-    for f in filelist {
+    for f in &filelist {
         let file = File::open(&f).expect(&format!("Cannot open file: {}", f.to_string_lossy()));
         let mut bufreader = std::io::BufReader::new(&file);
         if is_movie(&f) {
@@ -61,11 +63,16 @@ pub fn exiflist(target_path: PathBuf) -> anyhow::Result<()> {
                 _ => exiflist.insert(MP4_CREATION_TIME_KEY.to_string(), 1),
             };
         } else {
+            let exifreader = Reader::new();
             let exif = exifreader.read_from_container(&mut bufreader);
             match exif {
                 Err(err) => {
                     println!("filename: {}, err={}", f.to_string_lossy(), err);
-                    continue;
+                    /*let _: DateTime<Local> = f.metadata().unwrap().modified().unwrap().into();
+                    match exiflist.get(FILE_MTIME_KEY) {
+                        Some(&count) => exiflist.insert(FILE_MTIME_KEY.to_string(), count + 1),
+                        _ => exiflist.insert(MP4_CREATION_TIME_KEY.to_string(), 1),
+                    };*/
                 }
                 Ok(e) => {
                     for f in e.fields() {
@@ -84,6 +91,7 @@ pub fn exiflist(target_path: PathBuf) -> anyhow::Result<()> {
         }
     }
 
+    println!("Total file = {}", filelist.len());
     for i in exiflist {
         println!("{:?}", i);
     }
@@ -91,7 +99,6 @@ pub fn exiflist(target_path: PathBuf) -> anyhow::Result<()> {
 }
 
 pub async fn regist(target_path: PathBuf) -> anyhow::Result<()> {
-    let exifreader = Reader::new();
     let mut filelist = Vec::new();
     get_filelist(target_path, &mut filelist);
     for f in filelist {
@@ -105,8 +112,9 @@ pub async fn regist(target_path: PathBuf) -> anyhow::Result<()> {
         let file = File::open(&f).expect(&format!("Cannot open file: {}", f.to_string_lossy()));
         let mut bufreader = std::io::BufReader::new(&file);
         if is_movie(&f) {
-            create_image.digitized_at = get_mp4_creation_time(f, bufreader).timestamp();
+            create_image.digitized_at = get_mp4_creation_time(&f, bufreader).timestamp();
         } else {
+            let exifreader = Reader::new();
             let exif = exifreader.read_from_container(&mut bufreader);
             if let Ok(e) = exif {
                 insert_props_from_exif_field(&mut create_image.props, Tag::DateTimeOriginal, &e);
@@ -171,7 +179,7 @@ fn _get_dirname_and_basename(path: &String) -> (String, String) {
     r
 }
 
-fn get_mp4_creation_time(f: PathBuf, bufreader: BufReader<&File>) -> DateTime<Local> {
+fn get_mp4_creation_time(f: &PathBuf, bufreader: BufReader<&File>) -> DateTime<Local> {
     let size = f.metadata().unwrap().len();
     let mp4 = mp4::Mp4Reader::read_header(bufreader, size).unwrap();
     let dt1 = Local.timestamp(
