@@ -18,6 +18,10 @@ pub enum Command {
         #[clap(required = true)]
         target_path: PathBuf,
     },
+    Exiflist2 {
+        #[clap(required = true)]
+        target_path: PathBuf,
+    },
     Regist {
         #[clap(required = true)]
         target_path: PathBuf,

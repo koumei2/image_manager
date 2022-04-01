@@ -22,6 +22,7 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         args::Command::Info { target_path } => command::info(target_path)?,
         args::Command::Exiflist { target_path } => command::exiflist(target_path)?,
+        args::Command::Exiflist2 { target_path } => command::exiflist2(target_path)?,
         args::Command::Regist { target_path } => {
             db::init().await?;
             command::regist(target_path).await?;

@@ -5,6 +5,11 @@
         ".test"
     ],
     "MOVIE_EXTENSION": [
-        "mp4"
+        "mp4",
+        "MOV"
+    ],
+    "EXIF_IGNORE_EXTENSION": [
+        "avi",
+        "AVI"
     ]
 }

@@ -7,15 +7,17 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 
-static MP4_CREATION_TIME_KEY: &str = "creation_time";
+static MOVIE_CREATION_TIME_KEY: &str = "creation_time";
 static FILE_MTIME_KEY: &str = "file_mtime";
+static CONF_MOVIE_EXTENTION: &str = "MOVIE_EXTENSION";
+static CONF_IGNORE_EXTENTION: &str = "EXIF_IGNORE_EXTENSION";
 
 pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
     let mut filelist = Vec::new();
     get_filelist(target_path, &mut filelist);
     for f in filelist {
         let file = File::open(&f).expect(&format!("Cannot open file: {}", f.to_string_lossy()));
-        let mut bufreader = BufReader::new(&file);
+        let bufreader = BufReader::new(&file);
         if is_movie(&f) {
             println!(
                 "--- movie filename: {},  creation time:  {}",
@@ -23,25 +25,18 @@ pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
                 get_mp4_creation_time(&f, bufreader),
             );
         } else {
-            let exifreader = Reader::new();
-            let exif = exifreader.read_from_container(&mut bufreader);
-            match exif {
+            match rexif::parse_file(&f) {
+                Ok(exif) => {
+                    println!("filename: {} ", f.to_string_lossy().into_owned());
+                    for entry in &exif.entries {
+                        println!("\t{}: {}", entry.tag, entry.value_more_readable);
+                    }
+                }
                 Err(err) => {
                     println!("filename: {}, err={}", f.to_string_lossy(), err);
                     /*let mtime: DateTime<Local> = f.metadata().unwrap().modified().unwrap().into();
                     println!("--- {}", f.to_string_lossy());
                     println!("file timestamp = {:?}", mtime);*/
-                }
-                Ok(e) => {
-                    println!("--- {}", f.to_string_lossy());
-                    for field in e.fields() {
-                        println!(
-                            "{} {} {}",
-                            field.tag,
-                            field.ifd_num,
-                            field.display_value().with_unit(&e),
-                        );
-                    }
                 }
             }
         }
@@ -58,9 +53,9 @@ pub fn exiflist(target_path: PathBuf) -> anyhow::Result<()> {
         let mut bufreader = std::io::BufReader::new(&file);
         if is_movie(&f) {
             let _ = get_mp4_creation_time(f, bufreader);
-            match exiflist.get(MP4_CREATION_TIME_KEY) {
-                Some(&count) => exiflist.insert(MP4_CREATION_TIME_KEY.to_string(), count + 1),
-                _ => exiflist.insert(MP4_CREATION_TIME_KEY.to_string(), 1),
+            match exiflist.get(MOVIE_CREATION_TIME_KEY) {
+                Some(&count) => exiflist.insert(MOVIE_CREATION_TIME_KEY.to_string(), count + 1),
+                _ => exiflist.insert(MOVIE_CREATION_TIME_KEY.to_string(), 1),
             };
         } else {
             let exifreader = Reader::new();
@@ -92,6 +87,81 @@ pub fn exiflist(target_path: PathBuf) -> anyhow::Result<()> {
     }
 
     println!("Total file = {}", filelist.len());
+    for i in exiflist {
+        println!("{:?}", i);
+    }
+    Ok(())
+}
+
+pub fn exiflist2(target_path: PathBuf) -> anyhow::Result<()> {
+    let mut exiflist: BTreeMap<String, i32> = BTreeMap::new();
+    let mut filelist = Vec::new();
+    let mut ignore_file = Vec::new();
+    get_filelist(target_path, &mut filelist);
+    for f in &filelist {
+        let file = File::open(&f).expect(&format!("Cannot open file: {}", f.to_string_lossy()));
+        let mut bufreader = std::io::BufReader::new(&file);
+        if is_movie(&f) {
+            let _ = get_mp4_creation_time(f, bufreader);
+            match exiflist.get(MOVIE_CREATION_TIME_KEY) {
+                Some(&count) => exiflist.insert(MOVIE_CREATION_TIME_KEY.to_string(), count + 1),
+                _ => exiflist.insert(MOVIE_CREATION_TIME_KEY.to_string(), 1),
+            };
+        } else if is_png(&f) {
+            let exifreader = Reader::new();
+            let exif = exifreader.read_from_container(&mut bufreader);
+            match exif {
+                Err(err) => {
+                    println!("filename: {}, type=PNG, err={}", f.to_string_lossy(), err);
+                    /*let _: DateTime<Local> = f.metadata().unwrap().modified().unwrap().into();
+                    match exiflist.get(FILE_MTIME_KEY) {
+                        Some(&count) => exiflist.insert(FILE_MTIME_KEY.to_string(), count + 1),
+                        _ => exiflist.insert(MP4_CREATION_TIME_KEY.to_string(), 1),
+                    };*/
+                }
+                Ok(e) => {
+                    for f in e.fields() {
+                        if f.ifd_num != In::PRIMARY {
+                            continue;
+                        }
+
+                        let tag_string = f.tag.to_string();
+                        match exiflist.get(&tag_string) {
+                            Some(&count) => exiflist.insert(tag_string, count + 1),
+                            _ => exiflist.insert(tag_string, 1),
+                        };
+                    }
+                }
+            }
+        } else if is_ignore(&f) {
+            ignore_file.push(f.to_string_lossy());
+        } else {
+            match rexif::parse_file(&f) {
+                Ok(exif) => {
+                    for entry in &exif.entries {
+                        let tag_string = entry.tag.to_string();
+                        match exiflist.get(&tag_string) {
+                            Some(&count) => exiflist.insert(tag_string, count + 1),
+                            _ => exiflist.insert(tag_string, 1),
+                        };
+                    }
+                }
+                Err(err) => {
+                    println!("filename: {}, type=rexif, err={}", f.to_string_lossy(), err);
+                    /*let _: DateTime<Local> = f.metadata().unwrap().modified().unwrap().into();
+                    match exiflist.get(FILE_MTIME_KEY) {
+                        Some(&count) => exiflist.insert(FILE_MTIME_KEY.to_string(), count + 1),
+                        _ => exiflist.insert(MP4_CREATION_TIME_KEY.to_string(), 1),
+                    };*/
+                }
+            }
+        }
+    }
+
+    println!("Total file = {}", filelist.len());
+    for i in ignore_file {
+        println!("Ignore file = {}", i);
+    }
     for i in exiflist {
         println!("{:?}", i);
     }
@@ -205,7 +275,26 @@ fn is_movie(f: &PathBuf) -> bool {
     let movie_extension = super::CONFIG
         .get()
         .unwrap()
-        .get_array("MOVIE_EXTENSION")
+        .get_array(CONF_MOVIE_EXTENTION)
         .unwrap();
     movie_extension.iter().any(|x| x.to_string() == ex)
+}
+
+fn is_png(f: &PathBuf) -> bool {
+    let ex = f.extension().unwrap().to_string_lossy().into_owned();
+    match ex.as_str() {
+        "png" => true,
+        "PNG" => true,
+        _ => false,
+    }
+}
+
+fn is_ignore(f: &PathBuf) -> bool {
+    let ex = f.extension().unwrap().to_string_lossy().into_owned();
+    let extension = super::CONFIG
+        .get()
+        .unwrap()
+        .get_array(CONF_IGNORE_EXTENTION)
+        .unwrap();
+    extension.iter().any(|x| x.to_string() == ex)
 }
