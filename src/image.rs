@@ -16,6 +16,7 @@ pub struct Image {
     updated_at: chrono::NaiveDateTime,
 }
 
+#[derive(Debug)]
 pub struct RegistImage {
     pub file_path: String,
     pub file_name: String,

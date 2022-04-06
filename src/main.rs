@@ -20,13 +20,25 @@ async fn main() -> anyhow::Result<()> {
     let _ = CONFIG.set(config);
 
     match args.command {
+        args::Command::Exifinfo { target_path } => command::exifinfo(target_path)?,
         args::Command::Info { target_path } => command::info(target_path)?,
         args::Command::Exiflist { target_path } => command::exiflist(target_path)?,
         args::Command::Exiflist2 { target_path } => command::exiflist2(target_path)?,
-        args::Command::Regist { target_path } => {
+        args::Command::Regist {
+            dryrun,
+            target_path,
+        } => {
             db::init().await?;
-            command::regist(target_path).await?;
+            command::regist(target_path, dryrun).await?;
         }
     };
     Ok(())
+}
+
+// unused
+fn _get_dirname_and_basename(path: &String) -> (String, String) {
+    let re = regex::Regex::new(r"(.*)/([^/]+)").unwrap();
+    let caps = re.captures(path).unwrap();
+    let r = (caps[1].to_string(), caps[2].to_string());
+    r
 }

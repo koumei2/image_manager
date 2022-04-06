@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local, TimeZone};
 use exif::{In, Reader, Tag};
+use rexif::ExifData;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
@@ -8,9 +9,29 @@ use std::io::BufReader;
 use std::path::PathBuf;
 
 static MOVIE_CREATION_TIME_KEY: &str = "creation_time";
-static FILE_MTIME_KEY: &str = "file_mtime";
 static CONF_MOVIE_EXTENTION: &str = "MOVIE_EXTENSION";
 static CONF_IGNORE_EXTENTION: &str = "EXIF_IGNORE_EXTENSION";
+
+static PROPS_KEY_DATETIME_ORIGINAL: &str = "Date of original image";
+static PROPS_KEY_DATETIME_DIGITIZED: &str = "Date of image digitalization";
+static PROPS_KEY_DATETIME: &str = "Image date";
+
+pub fn exifinfo(filename: PathBuf) -> anyhow::Result<()> {
+    let file =
+        File::open(&filename).expect(&format!("Cannot open file: {}", filename.to_string_lossy()));
+    let mut bufreader = BufReader::new(&file);
+    let exifreader = exif::Reader::new();
+    let exif = exifreader.read_from_container(&mut bufreader)?;
+    for f in exif.fields() {
+        println!(
+            "{} {} {}",
+            f.tag,
+            f.ifd_num,
+            f.display_value().with_unit(&exif)
+        );
+    }
+    Ok(())
+}
 
 pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
     let mut filelist = Vec::new();
@@ -22,7 +43,7 @@ pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
             println!(
                 "--- movie filename: {},  creation time:  {}",
                 f.to_string_lossy().into_owned(),
-                get_mp4_creation_time(&f, bufreader),
+                Local.timestamp(get_mp4_creation_time(&f, bufreader), 0)
             );
         } else {
             match rexif::parse_file(&f) {
@@ -34,9 +55,6 @@ pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
                 }
                 Err(err) => {
                     println!("filename: {}, err={}", f.to_string_lossy(), err);
-                    /*let mtime: DateTime<Local> = f.metadata().unwrap().modified().unwrap().into();
-                    println!("--- {}", f.to_string_lossy());
-                    println!("file timestamp = {:?}", mtime);*/
                 }
             }
         }
@@ -44,6 +62,9 @@ pub fn info(target_path: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
+// kamadak-exif が改良されるまでは使わない想定
+// 改良されたら使用する予定で残しておく
+// 0.5.4 -> NG
 pub fn exiflist(target_path: PathBuf) -> anyhow::Result<()> {
     let mut exiflist: BTreeMap<String, i32> = BTreeMap::new();
     let mut filelist = Vec::new();
@@ -120,6 +141,7 @@ pub fn exiflist2(target_path: PathBuf) -> anyhow::Result<()> {
                     };*/
                 }
                 Ok(e) => {
+                    println!("filename: {}, type=PNGOK", f.to_string_lossy());
                     for f in e.fields() {
                         if f.ifd_num != In::PRIMARY {
                             continue;
@@ -148,11 +170,6 @@ pub fn exiflist2(target_path: PathBuf) -> anyhow::Result<()> {
                 }
                 Err(err) => {
                     println!("filename: {}, type=rexif, err={}", f.to_string_lossy(), err);
-                    /*let _: DateTime<Local> = f.metadata().unwrap().modified().unwrap().into();
-                    match exiflist.get(FILE_MTIME_KEY) {
-                        Some(&count) => exiflist.insert(FILE_MTIME_KEY.to_string(), count + 1),
-                        _ => exiflist.insert(MP4_CREATION_TIME_KEY.to_string(), 1),
-                    };*/
                 }
             }
         }
@@ -168,10 +185,11 @@ pub fn exiflist2(target_path: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn regist(target_path: PathBuf) -> anyhow::Result<()> {
+pub async fn regist(target_path: PathBuf, dryrun: bool) -> anyhow::Result<()> {
     let mut filelist = Vec::new();
     get_filelist(target_path, &mut filelist);
     for f in filelist {
+        //println!("{}", f.to_string_lossy());
         let mut create_image = crate::image::RegistImage {
             file_path: f.parent().unwrap().to_string_lossy().into_owned(),
             file_name: f.file_name().unwrap().to_string_lossy().into_owned(),
@@ -182,37 +200,95 @@ pub async fn regist(target_path: PathBuf) -> anyhow::Result<()> {
         let file = File::open(&f).expect(&format!("Cannot open file: {}", f.to_string_lossy()));
         let mut bufreader = std::io::BufReader::new(&file);
         if is_movie(&f) {
-            create_image.digitized_at = get_mp4_creation_time(&f, bufreader).timestamp();
-        } else {
+            create_image.digitized_at = get_mp4_creation_time(&f, bufreader);
+            create_image.props.insert(
+                MOVIE_CREATION_TIME_KEY.to_string(),
+                create_image.digitized_at.to_string(),
+            );
+        } else if is_png(&f) {
             let exifreader = Reader::new();
             let exif = exifreader.read_from_container(&mut bufreader);
-            if let Ok(e) = exif {
-                insert_props_from_exif_field(&mut create_image.props, Tag::DateTimeOriginal, &e);
-                insert_props_from_exif_field(&mut create_image.props, Tag::DateTimeDigitized, &e);
-                insert_props_from_exif_field(&mut create_image.props, Tag::DateTime, &e);
-
-                if let Some(v) = create_image.props.get(&Tag::DateTimeOriginal.to_string()) {
-                    create_image.digitized_at = Local
-                        .datetime_from_str(v, "%Y-%m-%d %H:%M:%S")
-                        .unwrap()
-                        .timestamp();
+            match exif {
+                Err(_) => {
+                    create_image.digitized_at = get_file_modified_time(f);
+                }
+                Ok(e) => {
+                    insert_props_from_exif_field(
+                        &mut create_image.props,
+                        Tag::DateTimeOriginal,
+                        &e,
+                    );
+                    insert_props_from_exif_field(
+                        &mut create_image.props,
+                        Tag::DateTimeDigitized,
+                        &e,
+                    );
+                    insert_props_from_exif_field(&mut create_image.props, Tag::DateTime, &e);
+                    if let Some(v) = create_image.props.get(&Tag::DateTimeOriginal.to_string()) {
+                        create_image.digitized_at = Local
+                            .datetime_from_str(v, "%Y-%m-%d %H:%M:%S")
+                            .unwrap()
+                            .timestamp();
+                    }
+                }
+            }
+        } else if is_ignore(&f) {
+            println!("skip file = {}", f.to_string_lossy());
+        } else {
+            match rexif::parse_file(&f) {
+                Ok(exif) => {
+                    insert_props_from_exif_field_by_rexif(
+                        &mut create_image.props,
+                        PROPS_KEY_DATETIME_DIGITIZED,
+                        &exif,
+                    );
+                    insert_props_from_exif_field_by_rexif(
+                        &mut create_image.props,
+                        PROPS_KEY_DATETIME_ORIGINAL,
+                        &exif,
+                    );
+                    insert_props_from_exif_field_by_rexif(
+                        &mut create_image.props,
+                        PROPS_KEY_DATETIME,
+                        &exif,
+                    );
+                    create_image.digitized_at =
+                        match create_image.props.get(PROPS_KEY_DATETIME_DIGITIZED) {
+                            Some(v) => Local
+                                .datetime_from_str(v, "%Y:%m:%d %H:%M:%S")
+                                .unwrap()
+                                .timestamp(),
+                            None => get_file_modified_time(f),
+                        };
+                }
+                Err(_) => {
+                    create_image.digitized_at = get_file_modified_time(f);
                 }
             }
         }
-        let image = create_image.db_regist_image().await?;
-        println!("{:?}", image);
+
+        if dryrun {
+            println!("[dryrun] {:?}", create_image);
+        } else {
+            let image = create_image.db_regist_image().await?;
+            println!("[regist] {:?}", image);
+        }
     }
 
     Ok(())
 }
 
-pub fn get_filelist(file_or_dir: std::path::PathBuf, filelist: &mut Vec<std::path::PathBuf>) {
+fn get_file_modified_time(f: std::path::PathBuf) -> i64 {
+    let modified: DateTime<Local> = f.metadata().unwrap().modified().unwrap().into();
+    modified.timestamp()
+}
+
+fn get_filelist(file_or_dir: std::path::PathBuf, filelist: &mut Vec<std::path::PathBuf>) {
     let ignore_list = super::CONFIG
         .get()
         .unwrap()
         .get_array("IGNORE_PATH")
         .unwrap();
-    //let file_or_dir_basename = regex::Regex::new(r".*/").unwrap().replace(&file_or_dir, "");
     if let Some(file_or_dir_basename) = file_or_dir.file_name() {
         for i in ignore_list {
             if file_or_dir_basename == std::ffi::OsStr::new(&i.to_string()) {
@@ -242,23 +318,24 @@ fn insert_props_from_exif_field(
     }
 }
 
-fn _get_dirname_and_basename(path: &String) -> (String, String) {
-    let re = regex::Regex::new(r"(.*)/([^/]+)").unwrap();
-    let caps = re.captures(path).unwrap();
-    let r = (caps[1].to_string(), caps[2].to_string());
-    r
+fn insert_props_from_exif_field_by_rexif(
+    props: &mut HashMap<String, String>,
+    tag: &str,
+    exif: &ExifData,
+) {
+    if let Some(v) = &exif.entries.iter().find(|e| e.tag.to_string() == tag) {
+        if v.value != rexif::TagValue::Ascii("0000:00:00 00:00:00".to_string()) {
+            props.insert(tag.to_string(), v.value.to_string());
+        }
+    }
 }
 
-fn get_mp4_creation_time(f: &PathBuf, bufreader: BufReader<&File>) -> DateTime<Local> {
+fn get_mp4_creation_time(f: &PathBuf, bufreader: BufReader<&File>) -> i64 {
     let size = f.metadata().unwrap().len();
     let mp4 = mp4::Mp4Reader::read_header(bufreader, size).unwrap();
-    let dt1 = Local.timestamp(
-        mp4_creation_time_convert(mp4.moov.mvhd.creation_time)
-            .try_into()
-            .unwrap(),
-        0,
-    );
-    dt1
+    mp4_creation_time_convert(mp4.moov.mvhd.creation_time)
+        .try_into()
+        .unwrap()
 }
 
 fn mp4_creation_time_convert(creation_time: u64) -> u64 {
